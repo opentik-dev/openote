@@ -105,6 +105,7 @@ class AppPrivateStorage implements FileStorageService {
 
         final title = _markdownService.resolveTitle(sampleContent, fileName);
         final snippet = _markdownService.extractSnippet(sampleContent);
+        final tags = _markdownService.extractTags(sampleContent);
         final isFav = favoritePaths?.contains(relPath) ?? false;
 
         notes.add(NoteFile(
@@ -114,6 +115,7 @@ class AppPrivateStorage implements FileStorageService {
           modifiedAt: modifiedAt,
           previewSnippet: snippet,
           isFavorite: isFav,
+          tags: tags,
         ));
       }
     }
@@ -209,6 +211,7 @@ class AppPrivateStorage implements FileStorageService {
       modifiedAt: modifiedAt,
       previewSnippet: snippet,
       isFavorite: false,
+      tags: _markdownService.extractTags(contentToWrite),
     );
   }
 

@@ -3,13 +3,17 @@ import 'package:flutter/services.dart';
 import '../models/note_file.dart';
 import '../state/notes_state_notifier.dart';
 import '../widgets/about_openote_dialog.dart';
+import '../widgets/backup_export_dialog.dart';
+import '../widgets/note_color_picker.dart';
 import '../widgets/note_grid_card.dart';
 import '../widgets/note_list_tile.dart';
 import '../widgets/notes_search_bar.dart';
+import '../widgets/pin_lock_dialog.dart';
 import 'note_editor_screen.dart';
 
 /// Main home screen displaying the searchable, filterable list of notes.
-/// Observes AppLifecycleState to automatically rescan when returning to foreground.
+/// Observes AppLifecycleState to automatically rescan when returning to foreground
+/// and enforces PIN security locks if enabled.
 class NotesHomeScreen extends StatefulWidget {
   final NotesStateNotifier notifier;
 
@@ -24,11 +28,17 @@ class NotesHomeScreen extends StatefulWidget {
 
 class _NotesHomeScreenState extends State<NotesHomeScreen>
     with WidgetsBindingObserver {
+  bool _isAppLockPromptShowing = false;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     widget.notifier.addListener(_onStateChanged);
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkAppLock();
+    });
   }
 
   @override
@@ -46,10 +56,43 @@ class _NotesHomeScreenState extends State<NotesHomeScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       widget.notifier.rescan();
+      _checkAppLock();
+    }
+  }
+
+  Future<void> _checkAppLock() async {
+    if (!mounted || _isAppLockPromptShowing) return;
+    if (widget.notifier.isAppLockEnabled()) {
+      final pin = widget.notifier.getAppPin();
+      if (pin != null && pin.isNotEmpty) {
+        _isAppLockPromptShowing = true;
+        final verified = await PinLockDialog.verify(
+          context,
+          pin,
+        );
+        _isAppLockPromptShowing = false;
+        if (!verified && mounted) {
+          // If canceled, prompt again
+          _checkAppLock();
+        }
+      }
     }
   }
 
   void _openNote(NoteFile note) async {
+    if (note.isLocked) {
+      final pin = widget.notifier.getAppPin();
+      if (pin != null && pin.isNotEmpty) {
+        final verified = await PinLockDialog.verify(context, pin);
+        if (!verified) return;
+      } else {
+        final newPin = await PinLockDialog.setPin(context);
+        if (newPin == null) return;
+        await widget.notifier.setAppPin(newPin);
+      }
+    }
+
+    if (!mounted) return;
     await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => NoteEditorScreen(
@@ -59,6 +102,34 @@ class _NotesHomeScreenState extends State<NotesHomeScreen>
       ),
     );
     widget.notifier.rescan();
+  }
+
+  Future<void> _handleToggleLock(NoteFile note) async {
+    final pin = widget.notifier.getAppPin();
+    if (note.isLocked) {
+      if (pin != null && pin.isNotEmpty) {
+        final verified = await PinLockDialog.verify(context, pin);
+        if (!verified) return;
+      }
+      await widget.notifier.toggleNoteLock(note.relativePath);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('تم إلغاء قفل الملاحظة ✓')),
+        );
+      }
+    } else {
+      if (pin == null || pin.isEmpty) {
+        final newPin = await PinLockDialog.setPin(context);
+        if (newPin == null) return;
+        await widget.notifier.setAppPin(newPin);
+      }
+      await widget.notifier.toggleNoteLock(note.relativePath);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('تم قفل الملاحظة وتأمينها برمز PIN 🔒')),
+        );
+      }
+    }
   }
 
   Future<void> _promptCreateNote() async {
@@ -82,7 +153,7 @@ class _NotesHomeScreenState extends State<NotesHomeScreen>
                   autofocus: true,
                   decoration: const InputDecoration(
                     labelText: 'عنوان الملاحظة',
-                    hintText: 'مثال: خطة العمل أو ملاحظات بحث',
+                    hintText: 'مثال: خطة العمل أو ملاحظات فيزياء',
                   ),
                 ),
                 const SizedBox(height: 16),
@@ -323,6 +394,74 @@ class _NotesHomeScreenState extends State<NotesHomeScreen>
     );
   }
 
+  void _showSecurityDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          final isLocked = widget.notifier.isAppLockEnabled();
+          final hasPin = widget.notifier.getAppPin() != null;
+
+          return AlertDialog(
+            title: const Row(
+              children: [
+                Icon(Icons.security_rounded, color: Colors.blueAccent),
+                SizedBox(width: 8),
+                Text('قفل التطبيق والأمان'),
+              ],
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SwitchListTile(
+                  title: const Text('قفل التطبيق برمز PIN'),
+                  subtitle: const Text('طلب الرمز السري عند فتح التطبيق'),
+                  value: isLocked,
+                  onChanged: (val) async {
+                    if (val && !hasPin) {
+                      final newPin = await PinLockDialog.setPin(context);
+                      if (newPin != null) {
+                        await widget.notifier.setAppPin(newPin);
+                        await widget.notifier.setAppLockEnabled(true);
+                      }
+                    } else {
+                      await widget.notifier.setAppLockEnabled(val);
+                    }
+                    setDialogState(() {});
+                  },
+                ),
+                const Divider(),
+                ListTile(
+                  leading: const Icon(Icons.password_rounded),
+                  title: Text(hasPin ? 'تغيير الرمز السري (PIN)' : 'تعيين رمز سري جديد'),
+                  trailing: const Icon(Icons.chevron_left),
+                  onTap: () async {
+                    final newPin = await PinLockDialog.setPin(context);
+                    if (newPin != null) {
+                      await widget.notifier.setAppPin(newPin);
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('تم تعيين الرمز السري بنجاح ✓')),
+                        );
+                      }
+                      setDialogState(() {});
+                    }
+                  },
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('تم'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   Widget _buildOptionTile(
     BuildContext ctx, {
     required String title,
@@ -355,6 +494,7 @@ class _NotesHomeScreenState extends State<NotesHomeScreen>
     final notifier = widget.notifier;
     final notes = notifier.filteredNotes;
     final folders = notifier.availableFolders;
+    final tags = notifier.availableTags;
     final isGrid = notifier.viewMode == 'grid';
 
     return Scaffold(
@@ -405,6 +545,15 @@ class _NotesHomeScreenState extends State<NotesHomeScreen>
                 case 'language':
                   _showLanguageDialog();
                   break;
+                case 'security':
+                  _showSecurityDialog();
+                  break;
+                case 'backup':
+                  showDialog(
+                    context: context,
+                    builder: (_) => BackupExportDialog(notifier: notifier),
+                  );
+                  break;
                 case 'about':
                   showDialog(
                     context: context,
@@ -431,6 +580,26 @@ class _NotesHomeScreenState extends State<NotesHomeScreen>
                     Icon(Icons.language_outlined, size: 20),
                     SizedBox(width: 10),
                     Text('لغة الواجهة'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'security',
+                child: Row(
+                  children: [
+                    Icon(Icons.security_rounded, size: 20, color: Colors.blueAccent),
+                    SizedBox(width: 10),
+                    Text('قفل التطبيق والأمان (PIN)'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'backup',
+                child: Row(
+                  children: [
+                    Icon(Icons.backup_outlined, size: 20, color: Colors.green),
+                    SizedBox(width: 10),
+                    Text('النسخ الاحتياطي والاستيراد (ZIP)'),
                   ],
                 ),
               ),
@@ -471,7 +640,8 @@ class _NotesHomeScreenState extends State<NotesHomeScreen>
                   label: const Text('الكل'),
                   selected: !notifier.showOnlyFavorites &&
                       !notifier.showOnlyArchived &&
-                      notifier.selectedFolder == null,
+                      notifier.selectedFolder == null &&
+                      notifier.selectedTag == null,
                   onSelected: (_) {
                     if (notifier.showOnlyFavorites) {
                       notifier.toggleShowOnlyFavorites();
@@ -480,6 +650,7 @@ class _NotesHomeScreenState extends State<NotesHomeScreen>
                       notifier.toggleShowOnlyArchived();
                     }
                     notifier.setSelectedFolder(null);
+                    notifier.setSelectedTag(null);
                   },
                 ),
                 const SizedBox(width: 8),
@@ -514,6 +685,37 @@ class _NotesHomeScreenState extends State<NotesHomeScreen>
               ],
             ),
           ),
+
+          // Tags Filter Chips Row (if tags exist)
+          if (tags.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            SizedBox(
+              height: 32,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                children: [
+                  ...tags.map(
+                    (tag) => Padding(
+                      padding: const EdgeInsets.only(left: 6),
+                      child: FilterChip(
+                        label: Text(
+                          '#$tag',
+                          style: const TextStyle(fontSize: 11),
+                        ),
+                        selected: notifier.selectedTag == tag,
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        visualDensity: VisualDensity.compact,
+                        onSelected: (selected) {
+                          notifier.setSelectedTag(selected ? tag : null);
+                        },
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 6),
 
           // Main Notes Area (List or Grid)
@@ -580,6 +782,13 @@ class _NotesHomeScreenState extends State<NotesHomeScreen>
                                         .toggleFavorite(note.relativePath),
                                     onToggleArchive: () => notifier
                                         .toggleArchive(note.relativePath),
+                                    onToggleLock: () => _handleToggleLock(note),
+                                    onChangeColor: () => NoteColorPicker.show(
+                                      context,
+                                      relativePath: note.relativePath,
+                                      notifier: notifier,
+                                      currentColorHex: note.colorHex,
+                                    ),
                                     onRename: () => _promptRename(note),
                                     onDelete: () => _confirmDelete(note),
                                     onShare: () => _shareNoteContent(note),
@@ -597,6 +806,13 @@ class _NotesHomeScreenState extends State<NotesHomeScreen>
                                         .toggleFavorite(note.relativePath),
                                     onToggleArchive: () => notifier
                                         .toggleArchive(note.relativePath),
+                                    onToggleLock: () => _handleToggleLock(note),
+                                    onChangeColor: () => NoteColorPicker.show(
+                                      context,
+                                      relativePath: note.relativePath,
+                                      notifier: notifier,
+                                      currentColorHex: note.colorHex,
+                                    ),
                                     onRename: () => _promptRename(note),
                                     onDelete: () => _confirmDelete(note),
                                     onShare: () => _shareNoteContent(note),

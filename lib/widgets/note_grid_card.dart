@@ -8,6 +8,8 @@ class NoteGridCard extends StatelessWidget {
   final VoidCallback onTap;
   final VoidCallback onToggleFavorite;
   final VoidCallback onToggleArchive;
+  final VoidCallback? onToggleLock;
+  final VoidCallback? onChangeColor;
   final VoidCallback onRename;
   final VoidCallback onDelete;
   final VoidCallback? onShare;
@@ -18,6 +20,8 @@ class NoteGridCard extends StatelessWidget {
     required this.onTap,
     required this.onToggleFavorite,
     required this.onToggleArchive,
+    this.onToggleLock,
+    this.onChangeColor,
     required this.onRename,
     required this.onDelete,
     this.onShare,
@@ -36,18 +40,39 @@ class NoteGridCard extends StatelessWidget {
     }
   }
 
+  Color? _parseColor(String? hex) {
+    if (hex == null || hex.isEmpty) return null;
+    final clean = hex.replaceAll('#', '');
+    if (clean.length == 6) {
+      return Color(int.parse('FF$clean', radix: 16));
+    }
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
+    final noteColor = _parseColor(note.colorHex);
+
+    Color cardBg;
+    if (noteColor != null) {
+      cardBg = isDark
+          ? noteColor.withValues(alpha: 0.22)
+          : noteColor.withValues(alpha: 0.12);
+    } else {
+      cardBg = isDark ? const Color(0xFF1E1E1E) : Colors.white;
+    }
 
     return Card(
       elevation: 0,
-      color: isDark ? const Color(0xFF1E1E1E) : Colors.white,
+      color: cardBg,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(14),
         side: BorderSide(
-          color: isDark ? const Color(0xFF2A2A2A) : const Color(0xFFE5E7EB),
+          color: noteColor != null
+              ? noteColor.withValues(alpha: 0.5)
+              : (isDark ? const Color(0xFF2A2A2A) : const Color(0xFFE5E7EB)),
           width: 1,
         ),
       ),
@@ -59,9 +84,14 @@ class NoteGridCard extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Header: Folder or Archive badge + Favorite + Menu
+              // Header: Folder or Lock / Archive badge + Favorite + Menu
               Row(
                 children: [
+                  if (note.isLocked) ...[
+                    const Icon(Icons.lock_rounded,
+                        size: 15, color: Colors.deepOrangeAccent),
+                    const SizedBox(width: 4),
+                  ],
                   if (note.isArchived)
                     Container(
                       padding: const EdgeInsets.symmetric(
@@ -111,6 +141,12 @@ class NoteGridCard extends StatelessWidget {
                     constraints: const BoxConstraints(),
                     onSelected: (value) {
                       switch (value) {
+                        case 'lock':
+                          onToggleLock?.call();
+                          break;
+                        case 'color':
+                          onChangeColor?.call();
+                          break;
                         case 'archive':
                           onToggleArchive();
                           break;
@@ -126,6 +162,33 @@ class NoteGridCard extends StatelessWidget {
                       }
                     },
                     itemBuilder: (context) => [
+                      PopupMenuItem(
+                        value: 'lock',
+                        child: Row(
+                          children: [
+                            Icon(
+                              note.isLocked
+                                  ? Icons.lock_open_rounded
+                                  : Icons.lock_outline_rounded,
+                              size: 18,
+                              color: Colors.deepOrangeAccent,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(note.isLocked ? 'إلغاء القفل' : 'قفل الملاحظة'),
+                          ],
+                        ),
+                      ),
+                      if (onChangeColor != null)
+                        const PopupMenuItem(
+                          value: 'color',
+                          child: Row(
+                            children: [
+                              Icon(Icons.palette_outlined, size: 18),
+                              SizedBox(width: 8),
+                              Text('تغيير اللون'),
+                            ],
+                          ),
+                        ),
                       PopupMenuItem(
                         value: 'archive',
                         child: Row(
@@ -195,20 +258,46 @@ class NoteGridCard extends StatelessWidget {
               // Snippet
               Expanded(
                 child: Text(
-                  note.previewSnippet.isNotEmpty
-                      ? note.previewSnippet
-                      : 'ملاحظة فارغة...',
+                  note.isLocked
+                      ? '🔒 ملاحظة محمية برمز سري...'
+                      : (note.previewSnippet.isNotEmpty
+                          ? note.previewSnippet
+                          : 'ملاحظة فارغة...'),
                   maxLines: 4,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontSize: 12,
                     height: 1.4,
+                    fontStyle: note.isLocked ? FontStyle.italic : FontStyle.normal,
                     color: isDark
                         ? const Color(0xFFA0A0A0)
                         : const Color(0xFF6B7280),
                   ),
                 ),
               ),
+
+              // Tags row if available
+              if (note.tags.isNotEmpty && !note.isLocked) ...[
+                const SizedBox(height: 4),
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: note.tags.take(3).map((tag) {
+                      return Padding(
+                        padding: const EdgeInsets.only(left: 4),
+                        child: Text(
+                          '#$tag',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                            color: theme.colorScheme.primary,
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ),
+              ],
 
               const SizedBox(height: 6),
               // Footer: Date

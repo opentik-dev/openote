@@ -1,10 +1,15 @@
+import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Manages user preferences including favorites, theme, language,
-/// view mode, and archived notes using relative paths for storage portability.
+/// view mode, archived notes, color coding, and PIN security locks.
 class PreferencesService {
   static const String _keyFavorites = 'favorite_note_relative_paths';
   static const String _keyArchived = 'archived_note_relative_paths';
+  static const String _keyLockedNotes = 'locked_note_relative_paths';
+  static const String _keyNoteColors = 'note_colors_map';
+  static const String _keyAppLockEnabled = 'app_lock_enabled';
+  static const String _keyAppPin = 'app_security_pin';
   static const String _keyThemeMode = 'app_theme_mode'; // 'system' | 'light' | 'dark'
   static const String _keyLocale = 'app_locale_code'; // 'ar' | 'en' | 'system'
   static const String _keyViewMode = 'home_view_mode'; // 'list' | 'grid'
@@ -75,10 +80,96 @@ class PreferencesService {
     return willBeArchived;
   }
 
+  // --- Note Colors Management ---
+
+  /// Returns map of note colors (relativePath -> hex string).
+  Map<String, String> getNoteColors() {
+    final raw = _prefs.getString(_keyNoteColors);
+    if (raw == null || raw.isEmpty) return {};
+    try {
+      final decoded = json.decode(raw) as Map<String, dynamic>;
+      return decoded.map((k, v) => MapEntry(k, v.toString()));
+    } catch (_) {
+      return {};
+    }
+  }
+
+  /// Gets color hex string for [relativePath] or null if default.
+  String? getNoteColor(String relativePath) {
+    return getNoteColors()[relativePath];
+  }
+
+  /// Sets or clears color hex string for [relativePath].
+  Future<void> setNoteColor(String relativePath, String? colorHex) async {
+    final colors = getNoteColors();
+    if (colorHex == null || colorHex.isEmpty) {
+      colors.remove(relativePath);
+    } else {
+      colors[relativePath] = colorHex;
+    }
+    await _prefs.setString(_keyNoteColors, json.encode(colors));
+  }
+
+  // --- Security & PIN Lock ---
+
+  /// Whether app lock is enabled.
+  bool isAppLockEnabled() {
+    return _prefs.getBool(_keyAppLockEnabled) ?? false;
+  }
+
+  /// Enables or disables app lock.
+  Future<void> setAppLockEnabled(bool enabled) async {
+    await _prefs.setBool(_keyAppLockEnabled, enabled);
+  }
+
+  /// Returns stored app PIN or null.
+  String? getAppPin() {
+    return _prefs.getString(_keyAppPin);
+  }
+
+  /// Saves new app PIN.
+  Future<void> setAppPin(String pin) async {
+    await _prefs.setString(_keyAppPin, pin);
+  }
+
+  /// Verifies entered PIN against stored PIN.
+  bool verifyPin(String enteredPin) {
+    final stored = getAppPin();
+    if (stored == null) return false;
+    return stored == enteredPin;
+  }
+
+  /// Returns set of relative paths of locked notes.
+  Set<String> getLockedNotePaths() {
+    final list = _prefs.getStringList(_keyLockedNotes) ?? [];
+    return list.toSet();
+  }
+
+  /// Checks if [relativePath] is locked.
+  bool isNoteLocked(String relativePath) {
+    return getLockedNotePaths().contains(relativePath);
+  }
+
+  /// Toggles note lock status for [relativePath].
+  Future<bool> toggleNoteLock(String relativePath) async {
+    final locked = getLockedNotePaths();
+    final bool willBeLocked;
+    if (locked.contains(relativePath)) {
+      locked.remove(relativePath);
+      willBeLocked = false;
+    } else {
+      locked.add(relativePath);
+      willBeLocked = true;
+    }
+    await _prefs.setStringList(_keyLockedNotes, locked.toList());
+    return willBeLocked;
+  }
+
   // --- File Lifecycle Synchronization ---
 
-  /// Updates favorite and archived paths when a note is renamed, preventing orphaned entries.
+  /// Updates all preferences when a note is renamed, preventing orphaned entries.
   Future<void> onNoteRenamed(String oldPath, String newPath) async {
+    // 1. Favorites
     final favorites = getFavoritePaths();
     if (favorites.contains(oldPath)) {
       favorites.remove(oldPath);
@@ -86,15 +177,32 @@ class PreferencesService {
       await _prefs.setStringList(_keyFavorites, favorites.toList());
     }
 
+    // 2. Archived
     final archived = getArchivedPaths();
     if (archived.contains(oldPath)) {
       archived.remove(oldPath);
       archived.add(newPath);
       await _prefs.setStringList(_keyArchived, archived.toList());
     }
+
+    // 3. Locked
+    final locked = getLockedNotePaths();
+    if (locked.contains(oldPath)) {
+      locked.remove(oldPath);
+      locked.add(newPath);
+      await _prefs.setStringList(_keyLockedNotes, locked.toList());
+    }
+
+    // 4. Color
+    final colors = getNoteColors();
+    if (colors.containsKey(oldPath)) {
+      final color = colors.remove(oldPath)!;
+      colors[newPath] = color;
+      await _prefs.setString(_keyNoteColors, json.encode(colors));
+    }
   }
 
-  /// Removes a deleted note from favorites and archive lists.
+  /// Removes a deleted note from all preference registries.
   Future<void> onNoteDeleted(String relativePath) async {
     final favorites = getFavoritePaths();
     if (favorites.contains(relativePath)) {
@@ -106,6 +214,18 @@ class PreferencesService {
     if (archived.contains(relativePath)) {
       archived.remove(relativePath);
       await _prefs.setStringList(_keyArchived, archived.toList());
+    }
+
+    final locked = getLockedNotePaths();
+    if (locked.contains(relativePath)) {
+      locked.remove(relativePath);
+      await _prefs.setStringList(_keyLockedNotes, locked.toList());
+    }
+
+    final colors = getNoteColors();
+    if (colors.containsKey(relativePath)) {
+      colors.remove(relativePath);
+      await _prefs.setString(_keyNoteColors, json.encode(colors));
     }
   }
 

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../utils/markdown_utils.dart';
+import 'scientific_symbol_sheet.dart';
 
 /// Clean, compact Markdown formatting toolbar designed to sit directly
 /// above the keyboard or at the top of the editor.
@@ -126,6 +127,13 @@ class MarkdownToolbar extends StatelessWidget {
             label: '𐩽',
             tooltip: 'فاصل كلمات المسند (Musnad Word Divider 𐩽)',
             onPressed: () => MarkdownUtils.wrapSelection(controller, '𐩽', ''),
+          ),
+          _buildDivider(context),
+          _buildButton(
+            context,
+            label: '∑',
+            tooltip: 'رموز ومعادلات علمية (رياضيات، فيزياء، كيمياء)',
+            onPressed: () => ScientificSymbolSheet.show(context, controller),
           ),
         ],
       ),

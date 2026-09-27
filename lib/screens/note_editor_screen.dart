@@ -1,9 +1,12 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../models/note_file.dart';
 import '../state/notes_state_notifier.dart';
 import '../widgets/markdown_preview.dart';
 import '../widgets/markdown_toolbar.dart';
+import '../widgets/note_color_picker.dart';
+import '../widgets/pin_lock_dialog.dart';
 
 /// Screen for editing and previewing Markdown notes with autosave
 /// and external modification conflict detection.
@@ -272,6 +275,145 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
                 );
               });
             },
+          ),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert),
+            onSelected: (val) async {
+              switch (val) {
+                case 'color':
+                  NoteColorPicker.show(
+                    context,
+                    relativePath: _currentNote.relativePath,
+                    notifier: widget.notifier,
+                    currentColorHex: _currentNote.colorHex,
+                  );
+                  break;
+                case 'lock':
+                  final pin = widget.notifier.getAppPin();
+                  if (_currentNote.isLocked) {
+                    if (pin != null && pin.isNotEmpty) {
+                      final verified = await PinLockDialog.verify(context, pin);
+                      if (!verified) return;
+                    }
+                  } else {
+                    if (pin == null || pin.isEmpty) {
+                      final newPin = await PinLockDialog.setPin(context);
+                      if (newPin == null) return;
+                      await widget.notifier.setAppPin(newPin);
+                    }
+                  }
+                  final newLocked = await widget.notifier.toggleNoteLock(_currentNote.relativePath);
+                  setState(() {
+                    _currentNote = _currentNote.copyWith(isLocked: newLocked);
+                  });
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(newLocked ? 'تم قفل الملاحظة 🔒' : 'تم إلغاء القفل ✓')),
+                    );
+                  }
+                  break;
+                case 'export_txt':
+                  try {
+                    final file = await widget.notifier.exportSingleNote(
+                      relativePath: _currentNote.relativePath,
+                      content: _contentController.text,
+                      asPlainText: true,
+                    );
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('تم تصدير الملاحظة كـ TXT في: ${file.path}')),
+                      );
+                    }
+                  } catch (e) {
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('فشل التصدير: $e')),
+                      );
+                    }
+                  }
+                  break;
+                case 'copy':
+                  await Clipboard.setData(ClipboardData(text: _contentController.text));
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('تم نسخ المحتوى بالكامل ✓')),
+                    );
+                  }
+                  break;
+                case 'info':
+                  final words = _contentController.text.trim().isEmpty
+                      ? 0
+                      : _contentController.text.trim().split(RegExp(r'\s+')).length;
+                  final chars = _contentController.text.length;
+                  showDialog(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      title: const Text('إحصاءات الملاحظة'),
+                      content: Text('عدد الكلمات: $words\nعدد الأحرف: $chars\nالمسار: ${_currentNote.relativePath}'),
+                      actions: [
+                        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إغلاق')),
+                      ],
+                    ),
+                  );
+                  break;
+              }
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'color',
+                child: Row(
+                  children: [
+                    Icon(Icons.palette_outlined, size: 18),
+                    SizedBox(width: 8),
+                    Text('لون الملاحظة'),
+                  ],
+                ),
+              ),
+              PopupMenuItem(
+                value: 'lock',
+                child: Row(
+                  children: [
+                    Icon(
+                      _currentNote.isLocked ? Icons.lock_open_rounded : Icons.lock_outline_rounded,
+                      size: 18,
+                      color: Colors.deepOrangeAccent,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(_currentNote.isLocked ? 'إلغاء القفل' : 'قفل الملاحظة'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'export_txt',
+                child: Row(
+                  children: [
+                    Icon(Icons.file_download_outlined, size: 18),
+                    SizedBox(width: 8),
+                    Text('تصدير كملف نصي (TXT)'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'copy',
+                child: Row(
+                  children: [
+                    Icon(Icons.copy_outlined, size: 18),
+                    SizedBox(width: 8),
+                    Text('نسخ المحتوى بالكامل'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'info',
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline, size: 18),
+                    SizedBox(width: 8),
+                    Text('معلومات وإحصاءات'),
+                  ],
+                ),
+              ),
+            ],
           ),
         ],
       ),

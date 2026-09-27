@@ -112,10 +112,12 @@ class MarkdownPreview extends StatelessWidget {
       );
     }
 
+    final processedData = _prepareMathData(data);
+
     return Directionality(
       textDirection: TextDirection.rtl,
       child: Markdown(
-        data: data,
+        data: processedData,
         controller: scrollController,
         selectable: true,
         extensionSet: md.ExtensionSet.gitHubFlavored,
@@ -134,5 +136,29 @@ class MarkdownPreview extends StatelessWidget {
         padding: const EdgeInsets.all(16),
       ),
     );
+  }
+
+  /// Pre-processes math formulas with Unicode BiDi isolation to preserve
+  /// clean LTR formulas within RTL Arabic prose.
+  String _prepareMathData(String input) {
+    // 1. Process block math: $$ ... $$ -> ```math\n...\n```
+    final blockProcessed = input.replaceAllMapped(
+      RegExp(r'\$\$\s*\n?([\s\S]*?)\n?\$\$', multiLine: true),
+      (match) {
+        final formula = match.group(1)?.trim() ?? '';
+        return '\n```math\n$formula\n```\n';
+      },
+    );
+
+    // 2. Process inline math: $...$ -> `\u2066...\u2069`
+    final inlineProcessed = blockProcessed.replaceAllMapped(
+      RegExp(r'(?<!\\)\$([^\$\n]+?)(?<!\\)\$'),
+      (match) {
+        final formula = match.group(1)?.trim() ?? '';
+        return '`\u2066$formula\u2069`';
+      },
+    );
+
+    return inlineProcessed;
   }
 }

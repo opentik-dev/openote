@@ -27,6 +27,15 @@ class NoteFile {
   /// Whether this note is marked as archived in user preferences.
   final bool isArchived;
 
+  /// Whether this note is locked with PIN protection.
+  final bool isLocked;
+
+  /// Optional color hex code for card tinting (e.g. '#EF4444').
+  final String? colorHex;
+
+  /// Tags parsed from note content (e.g. ['فيزياء', 'math']).
+  final List<String> tags;
+
   const NoteFile({
     required this.relativePath,
     required this.fileName,
@@ -35,6 +44,9 @@ class NoteFile {
     required this.previewSnippet,
     this.isFavorite = false,
     this.isArchived = false,
+    this.isLocked = false,
+    this.colorHex,
+    this.tags = const [],
   });
 
   /// The folder category portion of the relative path, or null if in root.
@@ -49,6 +61,9 @@ class NoteFile {
     String? previewSnippet,
     bool? isFavorite,
     bool? isArchived,
+    bool? isLocked,
+    String? colorHex,
+    List<String>? tags,
   }) {
     return NoteFile(
       relativePath: relativePath ?? this.relativePath,
@@ -58,6 +73,9 @@ class NoteFile {
       previewSnippet: previewSnippet ?? this.previewSnippet,
       isFavorite: isFavorite ?? this.isFavorite,
       isArchived: isArchived ?? this.isArchived,
+      isLocked: isLocked ?? this.isLocked,
+      colorHex: colorHex ?? this.colorHex,
+      tags: tags ?? this.tags,
     );
   }
 
@@ -69,16 +87,20 @@ class NoteFile {
           relativePath == other.relativePath &&
           modifiedAt == other.modifiedAt &&
           isFavorite == other.isFavorite &&
-          isArchived == other.isArchived;
+          isArchived == other.isArchived &&
+          isLocked == other.isLocked &&
+          colorHex == other.colorHex;
 
   @override
   int get hashCode =>
       relativePath.hashCode ^
       modifiedAt.hashCode ^
       isFavorite.hashCode ^
-      isArchived.hashCode;
+      isArchived.hashCode ^
+      isLocked.hashCode ^
+      (colorHex?.hashCode ?? 0);
 
   @override
   String toString() =>
-      'NoteFile(relativePath: $relativePath, title: $title, modifiedAt: $modifiedAt, isFavorite: $isFavorite, isArchived: $isArchived)';
+      'NoteFile(relativePath: $relativePath, title: $title, modifiedAt: $modifiedAt, isFavorite: $isFavorite, isArchived: $isArchived, isLocked: $isLocked, tags: $tags)';
 }

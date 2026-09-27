@@ -1,5 +1,8 @@
+import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as p;
 import '../models/note_file.dart';
+import '../services/backup_service.dart';
 import '../services/file_storage_service.dart';
 import '../services/preferences_service.dart';
 
@@ -7,15 +10,17 @@ import '../services/preferences_service.dart';
 ///
 /// Maintains an in-memory index derived strictly from the filesystem.
 /// All note metadata is derived directly from disk; preferences hold UI favorites,
-/// archived states, theme, language, and view layouts.
+/// archived states, theme, language, view layouts, note colors, and security locks.
 class NotesStateNotifier extends ChangeNotifier {
   final FileStorageService _storage;
   final PreferencesService _prefs;
+  final BackupService _backupService;
 
   List<NoteFile> _allNotes = [];
   bool _isLoading = false;
   String _searchQuery = '';
   String? _selectedFolder;
+  String? _selectedTag;
   bool _showOnlyFavorites = false;
   bool _showOnlyArchived = false;
 
@@ -26,8 +31,10 @@ class NotesStateNotifier extends ChangeNotifier {
   NotesStateNotifier({
     required FileStorageService storage,
     required PreferencesService prefs,
+    BackupService? backupService,
   })  : _storage = storage,
-        _prefs = prefs {
+        _prefs = prefs,
+        _backupService = backupService ?? const BackupService() {
     _themeMode = _prefs.getThemeMode();
     _localeCode = _prefs.getAppLocale();
     _viewMode = _prefs.getViewMode();
@@ -37,6 +44,7 @@ class NotesStateNotifier extends ChangeNotifier {
   bool get isLoading => _isLoading;
   String get searchQuery => _searchQuery;
   String? get selectedFolder => _selectedFolder;
+  String? get selectedTag => _selectedTag;
   bool get showOnlyFavorites => _showOnlyFavorites;
   bool get showOnlyArchived => _showOnlyArchived;
   String get themeMode => _themeMode;
@@ -55,7 +63,19 @@ class NotesStateNotifier extends ChangeNotifier {
     return sorted;
   }
 
-  /// Returns the filtered list of notes according to search, folder, favorites, and archive filters.
+  /// Returns unique tags extracted across all non-archived indexed notes.
+  List<String> get availableTags {
+    final tags = <String>{};
+    for (final note in _allNotes) {
+      if (!note.isArchived) {
+        tags.addAll(note.tags);
+      }
+    }
+    final sorted = tags.toList()..sort();
+    return sorted;
+  }
+
+  /// Returns the filtered list of notes according to search, folder, tag, favorites, and archive filters.
   List<NoteFile> get filteredNotes {
     return _allNotes.where((note) {
       // Archive filter
@@ -76,14 +96,24 @@ class NotesStateNotifier extends ChangeNotifier {
         return false;
       }
 
-      // Search query filter (matches title, filename, snippet, or path)
+      // Tag filter
+      if (_selectedTag != null && !note.tags.contains(_selectedTag)) {
+        return false;
+      }
+
+      // Search query filter (matches title, filename, snippet, path, or tags)
       if (_searchQuery.isNotEmpty) {
         final query = _searchQuery.toLowerCase();
         final matchesTitle = note.title.toLowerCase().contains(query);
         final matchesFileName = note.fileName.toLowerCase().contains(query);
         final matchesSnippet = note.previewSnippet.toLowerCase().contains(query);
         final matchesPath = note.relativePath.toLowerCase().contains(query);
-        if (!matchesTitle && !matchesFileName && !matchesSnippet && !matchesPath) {
+        final matchesTag = note.tags.any((t) => t.toLowerCase().contains(query));
+        if (!matchesTitle &&
+            !matchesFileName &&
+            !matchesSnippet &&
+            !matchesPath &&
+            !matchesTag) {
           return false;
         }
       }
@@ -113,10 +143,17 @@ class NotesStateNotifier extends ChangeNotifier {
   Future<void> _refreshFromDisk() async {
     final favorites = _prefs.getFavoritePaths();
     final archived = _prefs.getArchivedPaths();
+    final locked = _prefs.getLockedNotePaths();
+    final colors = _prefs.getNoteColors();
+
     final loaded = await _storage.listNotes(favoritePaths: favorites);
-    _allNotes = loaded
-        .map((n) => n.copyWith(isArchived: archived.contains(n.relativePath)))
-        .toList();
+    _allNotes = loaded.map((n) {
+      return n.copyWith(
+        isArchived: archived.contains(n.relativePath),
+        isLocked: locked.contains(n.relativePath),
+        colorHex: colors[n.relativePath],
+      );
+    }).toList();
   }
 
   /// Sets active search query.
@@ -128,6 +165,12 @@ class NotesStateNotifier extends ChangeNotifier {
   /// Selects or clears folder filter.
   void setSelectedFolder(String? folder) {
     _selectedFolder = folder;
+    notifyListeners();
+  }
+
+  /// Selects or clears tag filter.
+  void setSelectedTag(String? tag) {
+    _selectedTag = tag;
     notifyListeners();
   }
 
@@ -146,6 +189,7 @@ class NotesStateNotifier extends ChangeNotifier {
     if (_showOnlyArchived) {
       _showOnlyFavorites = false;
       _selectedFolder = null;
+      _selectedTag = null;
     }
     notifyListeners();
   }
@@ -172,6 +216,29 @@ class NotesStateNotifier extends ChangeNotifier {
     }
   }
 
+  /// Toggles note lock status for a given note.
+  Future<bool> toggleNoteLock(String relativePath) async {
+    final isLocked = await _prefs.toggleNoteLock(relativePath);
+
+    final index = _allNotes.indexWhere((n) => n.relativePath == relativePath);
+    if (index != -1) {
+      _allNotes[index] = _allNotes[index].copyWith(isLocked: isLocked);
+      notifyListeners();
+    }
+    return isLocked;
+  }
+
+  /// Sets color hex for a given note.
+  Future<void> setNoteColor(String relativePath, String? colorHex) async {
+    await _prefs.setNoteColor(relativePath, colorHex);
+
+    final index = _allNotes.indexWhere((n) => n.relativePath == relativePath);
+    if (index != -1) {
+      _allNotes[index] = _allNotes[index].copyWith(colorHex: colorHex);
+      notifyListeners();
+    }
+  }
+
   /// Toggles home screen view layout (list <-> grid).
   Future<void> toggleViewMode() async {
     _viewMode = _viewMode == 'list' ? 'grid' : 'list';
@@ -192,6 +259,70 @@ class NotesStateNotifier extends ChangeNotifier {
     await _prefs.setAppLocale(code);
     notifyListeners();
   }
+
+  // --- Security Passcode APIs ---
+
+  bool isAppLockEnabled() => _prefs.isAppLockEnabled();
+
+  Future<void> setAppLockEnabled(bool enabled) async {
+    await _prefs.setAppLockEnabled(enabled);
+    notifyListeners();
+  }
+
+  String? getAppPin() => _prefs.getAppPin();
+
+  Future<void> setAppPin(String pin) async {
+    await _prefs.setAppPin(pin);
+    notifyListeners();
+  }
+
+  bool verifyPin(String pin) => _prefs.verifyPin(pin);
+
+  bool isNoteLocked(String relativePath) => _prefs.isNoteLocked(relativePath);
+
+  // --- Backup & Export APIs ---
+
+  /// Creates a ZIP archive containing all current notes and returns the generated File.
+  Future<File> exportBackupZip([Directory? customTargetDir]) async {
+    final rootPath = await _storage.getRootPath();
+    final rootDir = Directory(rootPath);
+    final targetDir = customTargetDir ??
+        Directory(p.join(rootDir.parent.path, 'Backups'));
+    return _backupService.createBackupZip(
+      sourceNotesDir: rootDir,
+      targetBackupDir: targetDir,
+    );
+  }
+
+  /// Imports Markdown files from a ZIP archive and triggers rescan.
+  Future<int> importBackupZip(File zipFile) async {
+    final rootPath = await _storage.getRootPath();
+    final rootDir = Directory(rootPath);
+    final count = await _backupService.importBackupZip(
+      zipFile: zipFile,
+      destinationNotesDir: rootDir,
+    );
+    await rescan();
+    return count;
+  }
+
+  /// Exports a single note as TXT or MD.
+  Future<File> exportSingleNote({
+    required String relativePath,
+    required String content,
+    bool asPlainText = false,
+  }) async {
+    final rootPath = await _storage.getRootPath();
+    final exportDir = Directory(p.join(rootPath, 'Exports'));
+    return _backupService.exportSingleNote(
+      relativePath: relativePath,
+      content: content,
+      destinationDir: exportDir,
+      asPlainText: asPlainText,
+    );
+  }
+
+  // --- File Storage Operations ---
 
   /// Creates a new note on disk and appends it to the in-memory index.
   Future<NoteFile> createNote({

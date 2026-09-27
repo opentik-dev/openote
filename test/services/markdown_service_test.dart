@@ -66,4 +66,21 @@ void main() {
       expect(snippet.endsWith('...'), isTrue);
     });
   });
+
+  group('MarkdownService.extractTags', () {
+    test('extracts English and Arabic hashtags from content', () {
+      const content = '# Title\n\nNotes about #physics and #فيزياء with #مشروع_2026.';
+      final tags = service.extractTags(content);
+      expect(tags, contains('physics'));
+      expect(tags, contains('فيزياء'));
+      expect(tags, contains('مشروع_2026'));
+      expect(tags, isNot(contains('Title'))); // '# Title' is heading, not tag
+    });
+
+    test('returns empty list when no tags are present', () {
+      const content = '# Regular Heading\n\nRegular text without any hashtags.';
+      final tags = service.extractTags(content);
+      expect(tags, isEmpty);
+    });
+  });
 }
