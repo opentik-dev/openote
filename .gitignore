@@ -43,3 +43,23 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Package Binaries & Archives (Never commit to Git)
+*.apk
+*.aab
+*.ipa
+*.zip
+*.tar.gz
+
+# Local Android Properties & Signing Keys
+local.properties
+key.properties
+*.keystore
+*.jks
+
+# Environment & Temporary files
+.env
+.env.*
+*.bak
+*.tmp
+
